@@ -17,7 +17,7 @@ public class CsvParser
         foreach (var field in fields)
         {
             if (string.IsNullOrEmpty(field))
-                throw new EmptyFieldContentException();
+                throw new ApplicationException("Field is empty");
         }
 
         // Map fields to DataTable row
