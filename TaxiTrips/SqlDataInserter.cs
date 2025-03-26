@@ -109,14 +109,11 @@ public class SqlDataInserter
 
             bulkCopy.WriteToServer(dataTable);
         }
+        
+        //Step 2: Save detected duplicates to CSV and remove duplicates from staging 
+        DeleteAndExportDuplicates(conn);
 
-        // Step 2: Save detected duplicates to CSV
-        ExportDuplicatesToFile(conn);
-
-        // Step 3: Remove duplicates from staging
-        DeleteDuplicatesFromStaging(conn);
-
-        // Step 4: Move clean rows to main table
+        // Step 3: Move clean rows to main table
         using var cmd = new SqlCommand(@"
             INSERT INTO TaxiTrips
             (PickupDateTime, DropoffDateTime, PassengerCount, TripDistance, 
@@ -128,57 +125,157 @@ public class SqlDataInserter
         cmd.ExecuteNonQuery();
     }
 
-    private void ExportDuplicatesToFile(SqlConnection conn)
+    private void DeleteAndExportDuplicates(SqlConnection conn)
     {
-        var query = @$"
-;WITH 
-{DuplicatesInStagesCte},
-{DuplicatesWithMainCte}
-SELECT *
-FROM DuplicatesInStaging
-UNION 
-SELECT *
-FROM DuplicatesWithMain;";
+        // 1) Find duplicates inside staging (rn>1), export them
+        var stagingDupRows = FindStagingDuplicates(conn);
+        AppendToCsv(stagingDupRows);
+
+        // 2) Delete duplicates inside staging
+        DeleteStagingDuplicates(conn);
+
+        // 3) Find duplicates with main table, export them
+        var mainDupRows = FindDuplicatesWithMain(conn);
+        AppendToCsv(mainDupRows);
+
+        // 4) Delete duplicates with main table
+        DeleteDuplicatesWithMain(conn);
+    }
+
+    #region Step1: find staging duplicates
+
+    private IEnumerable<string> FindStagingDuplicates(SqlConnection conn)
+    {
+        const string query = @"
+;WITH Numbered AS (
+    SELECT s.*,
+           ROW_NUMBER() OVER (
+               PARTITION BY s.PickupDateTime, s.DropoffDateTime, s.PassengerCount
+               ORDER BY (SELECT NULL)
+           ) AS rn
+    FROM Staging_TaxiTrips s
+)
+SELECT s.*
+FROM Staging_TaxiTrips s
+JOIN Numbered n ON s.Id = n.Id
+WHERE n.rn > 1;
+";
 
         using var cmd = new SqlCommand(query, conn);
         using var reader = cmd.ExecuteReader();
 
-        var sb = new StringBuilder();
+        return ReadRowsAsCsvLines(reader);
+    }
+
+    #endregion
+
+    #region Step2: delete staging duplicates
+
+    private void DeleteStagingDuplicates(SqlConnection conn)
+    {
+        const string deleteQuery = @"
+;WITH Numbered AS (
+    SELECT s.*,
+           ROW_NUMBER() OVER (
+               PARTITION BY s.PickupDateTime, s.DropoffDateTime, s.PassengerCount
+               ORDER BY (SELECT NULL)
+           ) AS rn
+    FROM Staging_TaxiTrips s
+)
+DELETE s
+FROM Staging_TaxiTrips s
+JOIN Numbered n ON s.Id = n.Id
+WHERE n.rn > 1;
+";
+        using var deleteCmd = new SqlCommand(deleteQuery, conn);
+        deleteCmd.ExecuteNonQuery();
+    }
+
+    #endregion
+
+    #region Step3: find duplicates with main
+
+    private IEnumerable<string> FindDuplicatesWithMain(SqlConnection conn)
+    {
+        const string query = @"
+SELECT s.*
+FROM Staging_TaxiTrips s
+JOIN TaxiTrips t
+   ON  s.PickupDateTime  = t.PickupDateTime
+   AND s.DropoffDateTime = t.DropoffDateTime
+   AND s.PassengerCount  = t.PassengerCount;
+";
+
+        using var cmd = new SqlCommand(query, conn);
+        using var reader = cmd.ExecuteReader();
+
+        return ReadRowsAsCsvLines(reader);
+    }
+
+    #endregion
+
+    #region Step4: delete duplicates with main
+
+    private void DeleteDuplicatesWithMain(SqlConnection conn)
+    {
+        const string deleteQuery = @"
+DELETE s
+FROM Staging_TaxiTrips s
+JOIN TaxiTrips t
+   ON  s.PickupDateTime  = t.PickupDateTime
+   AND s.DropoffDateTime = t.DropoffDateTime
+   AND s.PassengerCount  = t.PassengerCount;
+";
+        using var deleteCmd = new SqlCommand(deleteQuery, conn);
+        deleteCmd.ExecuteNonQuery();
+    }
+
+    #endregion
+
+    #region Helper methods
+
+    /// <summary>
+    /// Reads all rows from a SqlDataReader and returns them as CSV strings
+    /// </summary>
+    private IEnumerable<string> ReadRowsAsCsvLines(SqlDataReader reader)
+    {
+        var list = new List<string>();
+
         while (reader.Read())
         {
             var row = new object[reader.FieldCount];
             reader.GetValues(row);
-
+            
             for (int i = 0; i < row.Length; i++)
             {
                 row[i] = row[i]?.ToString()?.Replace(",", ".");
             }
 
-            sb.AppendLine(string.Join(",", row));
+            list.Add(string.Join(",", row));
+        }
+
+        return list;
+    }
+
+    /// <summary>
+    /// Appends lines to a file duplicates.csv
+    /// </summary>
+    private void AppendToCsv(IEnumerable<string> csvLines)
+    {
+        // Если строк нет, выходим
+        if (csvLines == null) return;
+
+        var sb = new StringBuilder();
+        foreach (var line in csvLines)
+        {
+            sb.AppendLine(line);
         }
 
         File.AppendAllText(_duplicatesFilePath, sb.ToString());
     }
 
-    private void DeleteDuplicatesFromStaging(SqlConnection conn)
-    {
-        var deleteQuery = @$"
-;WITH {DuplicatesInStagesCte},{DuplicatesWithMainCte},
-AllDuplicates AS (
-    SELECT * FROM DuplicatesInStaging
-    UNION
-    SELECT * FROM DuplicatesWithMain
-)
-DELETE s
-FROM Staging_TaxiTrips s
-JOIN AllDuplicates d
-  ON s.PickupDateTime = d.PickupDateTime
- AND s.DropoffDateTime = d.DropoffDateTime
- AND s.PassengerCount = d.PassengerCount;";
+    #endregion
 
-        using var cmd = new SqlCommand(deleteQuery, conn);
-        cmd.ExecuteNonQuery();
-    }
 
     // SQL fragments for identifying duplicates
     private const string DuplicatesInStagesCte = @"

@@ -56,6 +56,7 @@ public class ETLProcess
                 catch (Exception ex)
                 {
                     _logger.LogWarning($"Failed to validate row: {ex.Message}\t fields: {string.Join(",", fields)}");
+                    continue;
                 }
 
                 // Add valid row to batch
