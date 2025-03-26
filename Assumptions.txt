@@ -1,0 +1,15 @@
+I made the following assumptions during implementation:
+
+CSV format is consistent — I assumed that all rows in the CSV file follow the header format without missing columns.
+
+Required fields are non-empty — I considered records with missing or empty critical fields (like dates, passenger count, or amounts) to be invalid and excluded them, logging them as warnings.
+
+Time zone conversion — I assumed that all timestamps in the input CSV are in Eastern Standard Time (EST), and converted them to UTC before storing in the database.
+
+Duplicate definition — A record is considered a duplicate if PickupDateTime, DropoffDateTime, and PassengerCount are the same (as per the specification). Only one copy is retained.
+
+Schema design — I used DATETIME2, DECIMAL, and INT data types based on typical ranges and expected accuracy for trip-related fields.
+
+File source is untrusted — so parsing and transformation includes validation and error handling.
+
+Large file support — the program was designed to handle large files (up to 10GB) by streaming the CSV line by line instead of loading it entirely into memory.
