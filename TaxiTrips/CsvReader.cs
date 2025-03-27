@@ -12,7 +12,6 @@ namespace TaxiTrips;
 /// Reads a CSV file and extracts rows along with a header-to-index mapping.
 /// </summary>
 public class CsvReader
-
 {
     private readonly string _filePath;
 

@@ -67,11 +67,6 @@ public class SqlDataInserter
 
         using var stagingCmd = new SqlCommand(stagingTableCmd, conn);
         stagingCmd.ExecuteNonQuery();
-
-        // Optional: truncate main table for testing
-        var truncateCmd = "TRUNCATE TABLE TaxiTrips;";
-        using var cmdTruncate = new SqlCommand(truncateCmd, conn);
-        cmdTruncate.ExecuteNonQuery();
     }
 
     public void Cleanup()
@@ -253,7 +248,6 @@ JOIN TaxiTrips t
 
             list.Add(string.Join(",", row));
         }
-
         return list;
     }
 
@@ -262,7 +256,6 @@ JOIN TaxiTrips t
     /// </summary>
     private void AppendToCsv(IEnumerable<string> csvLines)
     {
-        // Если строк нет, выходим
         if (csvLines == null) return;
 
         var sb = new StringBuilder();
@@ -275,31 +268,4 @@ JOIN TaxiTrips t
     }
 
     #endregion
-
-
-    // SQL fragments for identifying duplicates
-    private const string DuplicatesInStagesCte = @"
-DuplicatesInStaging AS (
-    SELECT PickupDateTime, DropoffDateTime, PassengerCount, TripDistance,
-           StoreAndFwdFlag, PULocationID, DOLocationID, FareAmount, TipAmount
-    FROM (
-        SELECT *, ROW_NUMBER() OVER (
-            PARTITION BY PickupDateTime, DropoffDateTime, PassengerCount
-            ORDER BY (SELECT NULL)
-        ) AS rn
-        FROM Staging_TaxiTrips
-    ) t
-    WHERE rn > 1
-)";
-
-    private const string DuplicatesWithMainCte = @"
-DuplicatesWithMain AS (
-    SELECT s.PickupDateTime, s.DropoffDateTime, s.PassengerCount, s.TripDistance,
-           s.StoreAndFwdFlag, s.PULocationID, s.DOLocationID, s.FareAmount, s.TipAmount
-    FROM Staging_TaxiTrips s
-    JOIN TaxiTrips t
-      ON s.PickupDateTime = t.PickupDateTime
-     AND s.DropoffDateTime = t.DropoffDateTime
-     AND s.PassengerCount = t.PassengerCount
-)";
 }
